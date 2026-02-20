@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from litellm import completion
 
 
-SYSTEM_PROMPT = """You are Lit-Muse, an elite literary analyst and Spotify music curator.
+TEXT_SYSTEM_PROMPT = """You are Lit-Muse, an elite literary analyst and Spotify music curator.
 Analyze the input text and recommend soundtrack songs that fit its emotional atmosphere, pacing, and themes.
 
 Requirements:
@@ -23,11 +23,25 @@ Requirements:
 5. Return exactly 5 track objects in "tracks".
 """
 
+BOOK_SYSTEM_PROMPT = """You are a literary and music expert.
+Given a book title and the reader's current mood, analyze the book's core themes and the user's specific context to curate a 5-song playlist.
+
+Requirements:
+1. Respect the user's Preferred Genre.
+2. Recommend only real songs.
+3. Output only valid JSON and nothing else.
+4. The JSON must follow this exact schema:
+{
+  "vibe_keywords": ["keyword1", "keyword2", "keyword3"],
+  "analysis": "A brief explanation of why this music fits the book and the user's mood.",
+  "tracks": [
+    {"title": "Song Name", "artist": "Artist Name"}
+  ]
+}
+5. Return exactly 5 track objects in "tracks".
+"""
+
 MODEL_OPTIONS: Dict[str, Dict[str, str]] = {
-    "Gemini 1.5 Flash": {
-        "model": "gemini/gemini-1.5-flash",
-        "api_env": "GEMINI_API_KEY",
-    },
     "Gemini 2.5 Flash": {
         "model": "gemini/gemini-2.5-flash",
         "api_env": "GEMINI_API_KEY",
@@ -41,6 +55,7 @@ MODEL_OPTIONS: Dict[str, Dict[str, str]] = {
         "api_env": "OPENROUTER_API_KEY",
     },
 }
+DEFAULT_MODEL_LABEL = "Gemini 2.5 Flash"
 
 
 def _normalize_keywords(raw_keywords: Any) -> List[str]:
@@ -89,27 +104,25 @@ def _extract_json_payload(raw_text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def analyze_text_for_music(
-    text: str,
-    genre: str,
+def _call_llm_json(
+    system_prompt: str,
+    user_prompt: str,
     api_key: str,
-    model_label: str = "Gemini 1.5 Flash",
+    model_label: str,
 ) -> Dict[str, Any]:
-    model_config = MODEL_OPTIONS.get(model_label, MODEL_OPTIONS["Gemini 1.5 Flash"])
-    model = model_config["model"]
+    model_config = MODEL_OPTIONS.get(model_label, MODEL_OPTIONS[DEFAULT_MODEL_LABEL])
+    model_name = model_config["model"]
     api_env = model_config["api_env"]
-
     os.environ[api_env] = api_key
 
-    user_prompt = f"Text to analyze: {text}\nPreferred Genre: {genre}"
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
     try:
         response = completion(
-            model=model,
+            model=model_name,
             messages=messages,
             response_format={"type": "json_object"},
         )
@@ -121,7 +134,7 @@ def analyze_text_for_music(
     if parsed is None:
         try:
             response = completion(
-                model=model,
+                model=model_name,
                 messages=messages,
             )
             raw_output = response.choices[0].message.content or ""
@@ -140,3 +153,41 @@ def analyze_text_for_music(
     if len(result["tracks"]) != 5:
         result["warning"] = f"Expected 5 tracks, received {len(result['tracks'])}."
     return result
+
+
+def analyze_text_for_music(
+    text: str,
+    genre: str,
+    api_key: str,
+    model_label: str = DEFAULT_MODEL_LABEL,
+) -> Dict[str, Any]:
+    user_prompt = f"Text to analyze: {text}\nPreferred Genre: {genre}"
+    return _call_llm_json(
+        system_prompt=TEXT_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        api_key=api_key,
+        model_label=model_label,
+    )
+
+
+def analyze_book_vibe(
+    title: str,
+    author: str,
+    mood: str,
+    genre: str,
+    api_key: str,
+    model_label: str = DEFAULT_MODEL_LABEL,
+) -> Dict[str, Any]:
+    author_text = author.strip() if author.strip() else "Not provided"
+    user_prompt = (
+        f"Book Title: {title}\n"
+        f"Author: {author_text}\n"
+        f"Current Mood/Scenario: {mood}\n"
+        f"Preferred Genre: {genre}"
+    )
+    return _call_llm_json(
+        system_prompt=BOOK_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        api_key=api_key,
+        model_label=model_label,
+    )
